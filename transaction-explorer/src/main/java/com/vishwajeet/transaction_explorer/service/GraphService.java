@@ -10,6 +10,11 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * Service layer for graph exploration.
+ * Implements Level calculation (Requirement 4.2), Cycle Detection (Requirement 5.3),
+ * and Recursive Depth Traversal (Requirement 5.1).
+ */
 @Service
 public class GraphService {
 
@@ -21,110 +26,133 @@ public class GraphService {
     }
 
     /**
-     * Primary entry point for node exploration.
-     * Orchestrates level calculation, hierarchy building, and data aggregation.
+     * Requirement 4.2 & 5.1: Explore a node and its descendants.
      */
     public NodeResponse exploreNode(String id, int maxDepth) {
-        // Validate existence first to avoid unnecessary processing
         GraphNode node = repository.findById(id)
                 .orElseThrow(() -> new NodeNotFoundException(id));
 
-        NodeResponse response = new NodeResponse();
-
-        // Map basic fields
-        response.setId(node.getId());
+        NodeResponse response = mapToResponse(node);
         response.setParentId(node.getParentId());
-        response.setName(node.getName());
-        response.setAccountNumber(node.getAccountNumber());
-        response.setTransactions(node.getTransactions());
 
-        // 1. Level Calculation: We pass a new Set for every request to track visited IDs
-        // and prevent infinite recursion from malicious or malformed data.
-        response.setLevel(calculateLevel(id, new HashSet<>()));
+        // 1. Level Calculation (Top-level node)
+        int rootLevel = calculateLevel(id, new HashSet<>());
+        response.setLevel(rootLevel);
 
-        // 2. Parent Lineage: Build the chain from Root -> Immediate Parent.
+        // 2. Parent Lineage
         response.setParentChain(buildParentChain(id));
 
-        // 3. Child Discovery: Fetch direct children from our pre-indexed map (O(1) lookup).
+        // 3. Child Discovery (Direct)
         List<GraphNode> directChildren = repository.findChildren(id);
         response.setDirectChildren(directChildren);
 
-        // 4. Transaction Aggregation: Using Java Streams to flatten the list of
-        // transactions belonging to all immediate child nodes.
+        // 4. Flags
+        response.setRoot(rootLevel == 0);
+        response.setLeaf(directChildren.isEmpty());
+
+        // 5. Aggregate Next-Level Transactions
         response.setNextLevelTransactions(directChildren.stream()
                 .filter(child -> child.getTransactions() != null)
                 .flatMap(child -> child.getTransactions().stream())
                 .collect(Collectors.toList()));
 
-        // 5. Node States: Set flags based on graph position.
-        response.setRoot(response.getLevel() == 0);
-        response.setLeaf(directChildren.isEmpty());
+        // 6. Recursive Children Tree (Bonus 5.1)
+        Set<String> visited = new HashSet<>();
+        visited.add(id);
+
+        if (maxDepth > 0) {
+            response.setChildren(buildChildHierarchy(id, maxDepth - 1, rootLevel, visited));
+        } else {
+            response.setChildren(new ArrayList<>());
+        }
 
         return response;
     }
 
     /**
-     * Recursive Level Calculation (DFS approach).
-     * Rule: Level 0 if parent is null or missing. Level N = 1 + level(parent).
+     * Recursive helper to build the tree downwards.
+     * Passes currentLevel + 1 to each generation to maintain accurate depth data.
      */
-    private int calculateLevel(String id, Set<String> visited) {
-        // Safety Check: If we see the same ID twice in one path, we have a cycle.
-        if (visited.contains(id)) {
-            throw new CycleDetectedException(id);
+    private List<NodeResponse> buildChildHierarchy(String parentId, int currentDepth, int currentLevel, Set<String> visited) {
+        if (currentDepth < 0) return new ArrayList<>();
+
+        List<GraphNode> children = repository.findChildren(parentId);
+        List<NodeResponse> childResponses = new ArrayList<>();
+
+        for (GraphNode child : children) {
+            if (visited.contains(child.getId())) {
+                throw new CycleDetectedException(child.getId());
+            }
+
+            Set<String> branchVisited = new HashSet<>(visited);
+            branchVisited.add(child.getId());
+
+            NodeResponse childRes = mapToResponse(child);
+
+            // Set calculated level and flags for nested nodes
+            int childLevel = currentLevel + 1;
+            childRes.setLevel(childLevel);
+            childRes.setRoot(false);
+            childRes.setLeaf(repository.findChildren(child.getId()).isEmpty());
+
+            if (currentDepth > 0) {
+                childRes.setChildren(buildChildHierarchy(child.getId(), currentDepth - 1, childLevel, branchVisited));
+            } else {
+                childRes.setChildren(new ArrayList<>());
+            }
+
+            childResponses.add(childRes);
         }
+        return childResponses;
+    }
+
+    private int calculateLevel(String id, Set<String> visited) {
+        if (visited.contains(id)) throw new CycleDetectedException(id);
         visited.add(id);
 
         GraphNode node = repository.findById(id).orElse(null);
-
-        // Requirement: Treat node as Level 0 if parent is null OR parent not in dataset.
-        if (node == null || node.getParentId() == null || !repository.
-                exists(node.getParentId())) {
+        if (node == null || node.getParentId() == null || !repository.exists(node.getParentId())) {
             return 0;
         }
-
         return 1 + calculateLevel(node.getParentId(), visited);
     }
 
-    /**
-     * Path Tracing: Walks up the tree to the root.
-     * Uses a Deque (addFirst) to maintain the correct chronological order (Root -> Parent).
-     */
     private List<GraphNode> buildParentChain(String id) {
         Deque<GraphNode> chain = new ArrayDeque<>();
         Set<String> visited = new HashSet<>();
         GraphNode current = repository.findById(id).orElse(null);
 
         while (current != null && current.getParentId() != null) {
-            // Cycle detection for iterative loop
-            if (visited.contains(current.getId())) {
-                throw new CycleDetectedException(id);
-            }
+            if (visited.contains(current.getId())) throw new CycleDetectedException(id);
             visited.add(current.getId());
 
             Optional<GraphNode> parent = repository.findById(current.getParentId());
-
-            // If parent exists in JSON, add it to the front of the chain.
             if (parent.isPresent()) {
                 chain.addFirst(parent.get());
                 current = parent.get();
             } else {
-                // If the parent is missing (orphan case), we stop here.
                 break;
             }
         }
         return new ArrayList<>(chain);
     }
 
-    /**
-     * Bonus 5.4: Transaction Filtering.
-     * Demonstrates use of functional predicates for clean filtering logic.
-     */
     public List<NodeTransaction> getFilteredChildTransactions(String id, Double min, Double max, String type) {
         return repository.findChildren(id).stream()
+                .filter(Objects::nonNull)
                 .flatMap(child -> child.getTransactions().stream())
                 .filter(t -> (min == null || t.getAmount() >= min))
                 .filter(t -> (max == null || t.getAmount() <= max))
                 .filter(t -> (type == null || t.getTxnType().equalsIgnoreCase(type)))
                 .collect(Collectors.toList());
+    }
+
+    private NodeResponse mapToResponse(GraphNode node) {
+        NodeResponse res = new NodeResponse();
+        res.setId(node.getId());
+        res.setName(node.getName());
+        res.setAccountNumber(node.getAccountNumber());
+        res.setTransactions(node.getTransactions() != null ? node.getTransactions() : new ArrayList<>());
+        return res;
     }
 }

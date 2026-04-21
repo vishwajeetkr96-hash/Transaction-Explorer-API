@@ -17,5 +17,6 @@ public class NodeResponse {
     private List<NodeTransaction> nextLevelTransactions;
     private boolean isRoot;
     private boolean isLeaf;
+    private List<NodeResponse> children;
 
 }

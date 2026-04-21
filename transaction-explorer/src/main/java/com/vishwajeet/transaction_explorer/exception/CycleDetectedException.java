@@ -1,7 +1,11 @@
 package com.vishwajeet.transaction_explorer.exception;
 
-public class CycleDetectedException extends GraphException {
+/**
+ * Thrown when a circular dependency is detected during graph traversal.
+ * Triggers a 400 BAD REQUEST via GlobalExceptionHandler.
+ */
+public class CycleDetectedException extends RuntimeException {
     public CycleDetectedException(String id) {
-        super("Circular dependency detected starting at node: " + id);
+        super("Circular dependency detected at Node ID: " + id + ". Traversal halted to prevent infinite loop.");
     }
 }

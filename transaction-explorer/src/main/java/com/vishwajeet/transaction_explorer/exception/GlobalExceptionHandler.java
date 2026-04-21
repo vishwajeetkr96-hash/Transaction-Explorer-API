@@ -4,49 +4,82 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
 
 import java.util.Map;
+import java.time.LocalDateTime;
 
 /**
- * Global interceptor that ensures all errors return a structured JSON
- * response instead of a raw stack trace.
+ * Global interceptor for centralized error handling.
+ * Ensures consistent JSON responses for business logic, framework-level errors,
+ * and unexpected system failures.
  */
 @ControllerAdvice
 public class GlobalExceptionHandler {
 
-    // Requirement 4.2: Handle missing nodes with 404
-    @ExceptionHandler(NodeNotFoundException.class)
-    public ResponseEntity<Map<String, String>> handleNodeNotFound(NodeNotFoundException ex) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
-                "error", "NODE_NOT_FOUND",
-                "message", ex.getMessage()
-        ));
+    /**
+     * Handles 404 errors for incorrect URLs/Endpoints.
+     * Note: Requires 'spring.mvc.throw-exception-if-no-handler-found=true' in properties.
+     */
+    @ExceptionHandler(NoHandlerFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNoHandlerFound(NoHandlerFoundException ex) {
+        return buildResponse(HttpStatus.NOT_FOUND, "INVALID_URL", "The requested URL does not exist.");
     }
 
-    // Requirement 5.3: Handle graph cycles with 400
-    @ExceptionHandler(CycleDetectedException.class)
-    public ResponseEntity<Map<String, String>> handleCycleDetected(CycleDetectedException ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
-                "error", "CYCLE_DETECTED",
-                "message", ex.getMessage()
-        ));
+    /**
+     * Handles 400 errors when URL parameters fail type conversion (e.g., maxDepth='abc').
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Map<String, Object>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String detail = String.format("Parameter '%s' expects type '%s'.", ex.getName(), ex.getRequiredType().getSimpleName());
+        return buildResponse(HttpStatus.BAD_REQUEST, "TYPE_MISMATCH", detail);
     }
 
-    // Handle invalid query parameters (like maxDepth < 0)
+    /**
+     * Handles manual validation failures thrown from the Controller or Service.
+     * Useful for checking constraints like maxDepth > 5 or minAmount > maxAmount.
+     */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, String>> handleInvalidInput(IllegalArgumentException ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
-                "error", "INVALID_INPUT",
-                "message", ex.getMessage()
-        ));
+    public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "INVALID_ARGUMENT", ex.getMessage());
     }
 
-    // Generic fallback for any other unexpected errors
+    /**
+     * Requirement 4.2: Handles missing nodes in the hierarchy.
+     */
+    @ExceptionHandler(NodeNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNodeNotFound(NodeNotFoundException ex) {
+        return buildResponse(HttpStatus.NOT_FOUND, "NODE_NOT_FOUND", ex.getMessage());
+    }
+
+    /**
+     * Requirement 5.3: Prevents infinite recursion in malformed hierarchies.
+     */
+    @ExceptionHandler(CycleDetectedException.class)
+    public ResponseEntity<Map<String, Object>> handleCycleDetected(CycleDetectedException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "CYCLE_DETECTED", ex.getMessage());
+    }
+
+    /**
+     * Generic fallback for any other unexpected errors (e.g., NullPointerException, DB issues).
+     * This prevents the leakage of raw stack traces to the client.
+     */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Map<String, String>> handleGeneralError(Exception ex) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
-                "error", "INTERNAL_SERVER_ERROR",
-                "message", "An unexpected system error occurred."
+    public ResponseEntity<Map<String, Object>> handleGeneralError(Exception ex) {
+        // In a real app, you would log the actual exception here: logger.error(ex.getMessage(), ex);
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_SERVER_ERROR", "An unexpected system error occurred.");
+    }
+
+    /**
+     * Helper to maintain a consistent error structure across the API.
+     */
+    private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String error, String message) {
+        return ResponseEntity.status(status).body(Map.of(
+                "timestamp", LocalDateTime.now(),
+                "status", status.value(),
+                "error", error,
+                "message", message
         ));
     }
 }

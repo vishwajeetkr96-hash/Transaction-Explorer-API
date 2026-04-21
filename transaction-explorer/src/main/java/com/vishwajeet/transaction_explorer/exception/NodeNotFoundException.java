@@ -1,9 +1,11 @@
 package com.vishwajeet.transaction_explorer.exception;
 
-import com.vishwajeet.transaction_explorer.exception.GraphException;
-
-public class NodeNotFoundException extends GraphException {
+/**
+ * Thrown when a requested Node ID is not found in the repository.
+ * Triggers a 404 NOT FOUND via GlobalExceptionHandler.
+ */
+public class NodeNotFoundException extends RuntimeException {
     public NodeNotFoundException(String id) {
-        super("Graph node " + id + " does not exist");
+        super("Node with ID '" + id + "' was not found in the system.");
     }
 }
