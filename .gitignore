@@ -31,3 +31,13 @@ build/
 
 ### VS Code ###
 .vscode/
+# Build and Output
+**/target/
+**/build/
+bin/
+out/
+
+# Maven Wrapper
+.mvn/
+mvnw
+mvnw.cmd
